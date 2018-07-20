@@ -13,18 +13,20 @@ class FFTNet(object):
         self.fft_layers = []
 
         if utils.is_mulaw_quantize(self.hp.input_type):
-            self.pad_value = 128
+            pad_value = 128
             self.in_channels = 256
         else:
-            self.pad_value = 0
+            pad_value = 0
             self.in_channels = 1
 
         for idx in range(0, hp.n_layers):
             layer_index = hp.n_layers - idx
             if idx == 0:
-                self.fft_layers += [FFTLayer(self.in_channels, hp.hidden_channels, layer_index, hp.cin_channels, name='fft_layer_{}'.format(idx))]
+                self.fft_layers += [FFTLayer(self.in_channels, hp.hidden_channels, layer_index, hp.cin_channels,
+                                             pad_value, name='fft_layer_{}'.format(idx))]
             else:
-                self.fft_layers += [FFTLayer(hp.hidden_channels, hp.hidden_channels, layer_index, hp.cin_channels, name='fft_layer_{}'.format(idx))]
+                self.fft_layers += [FFTLayer(hp.hidden_channels, hp.hidden_channels, layer_index, hp.cin_channels,
+                                             pad_value, name='fft_layer_{}'.format(idx))]
         self.out_layer = tf.layers.Dense(units=hp.quantize_channels, name='out_dense')
 
         # upsample conv
@@ -43,10 +45,6 @@ class FFTNet(object):
         if g is not None:
             raise NotImplementedError("global condition is not added now!")
 
-        # apply zero padding to inputs
-        padding = tf.constant([[0, 0], [self.receptive_filed, 0]])
-        inputs = tf.pad(inputs, padding, constant_values=self.pad_value)
-
         # the rank of inputs is 2
         if utils.is_mulaw_quantize(self.hp.input_type):
             inputs = tf.one_hot(tf.cast(inputs, tf.int32), self.hp.quantize_channels)
@@ -64,12 +62,6 @@ class FFTNet(object):
             for transposed_conv in self.upsample_conv:
                 c = transposed_conv(c)
             c = tf.squeeze(c, axis=-1)  # [B new_T cin_channels]
-
-        # apply zero padding to condition
-        if c is not None:
-            c_shape = tf.shape(c)
-            padding_c = tf.zeros([c_shape[0], self.receptive_filed, c_shape[-1]])
-            c = tf.concat([padding_c, c], axis=1)
 
         # for training, we need to use previous samples and the condition of next sample (shift by one)
         outputs = outputs[:, :-1, :]
@@ -125,7 +117,7 @@ class FFTNet(object):
                 current_outputs = layer(current_outputs, c=current_c)
             current_outputs = self.out_layer(current_outputs)
 
-            posterior = tf.nn.softmax(tf.reshape(current_outputs, [1, -1]), axis=-1)
+            posterior = tf.nn.softmax(tf.reshape(current_outputs[:, -1, :], [1, -1]), axis=-1)
 
             # dist = tf.distributions.Categorical(probs=posterior)
             # sample = tf.cast(dist.sample(), tf.int32)
@@ -171,7 +163,7 @@ class FFTNet(object):
         with tf.variable_scope("loss"):
             loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 logits=self.outputs,
-                labels=self.targets
+                labels=self.targets[:, 1:]
             )
             self.loss = tf.reduce_mean(loss)
 

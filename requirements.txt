@@ -1,0 +1,5 @@
+tensorflow
+lws
+nnmnkwii
+numpy
+librosa
