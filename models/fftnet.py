@@ -68,6 +68,9 @@ class FFTNet(object):
         if c is not None:
             c = c[:, 1:, :]
 
+        with tf.control_dependencies([tf.assert_equal(tf.shape(outputs)[1], tf.shape(c)[1])]):
+            c = tf.identity(c)
+
         for layer in self.fft_layers:
             outputs = layer(outputs, c=c)
         outputs = self.out_layer(outputs)
