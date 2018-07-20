@@ -5,13 +5,12 @@ import os
 from utils import audio
 from nnmnkwii.datasets import cmu_arctic
 from nnmnkwii import preprocessing as P
-from hparams import hparams
 import librosa
 
 from utils import is_mulaw_quantize, is_mulaw, is_raw
 
 
-def build_from_path(in_dir, out_dir, num_workers=1, tqdm=lambda x: x):
+def build_from_path(hparams, in_dir, out_dir, num_workers=1, tqdm=lambda x: x):
     executor = ProcessPoolExecutor(max_workers=num_workers)
     futures = []
 
@@ -24,14 +23,17 @@ def build_from_path(in_dir, out_dir, num_workers=1, tqdm=lambda x: x):
     for index, (speaker_id, wav_path) in enumerate(
             zip(speaker_ids, wav_paths)):
         futures.append(executor.submit(
-            partial(_process_utterance, out_dir, index + 1, speaker_id, wav_path, "N/A")))
+            partial(_process_utterance, out_dir, index + 1, speaker_id, wav_path, "N/A", hparams)))
     return [future.result() for future in tqdm(futures)]
 
 
-def _process_utterance(out_dir, index, speaker_id, wav_path, text):
+def _process_utterance(out_dir, index, speaker_id, wav_path, text, hparams):
 
     # Load the audio to a numpy array. Resample if needed
     wav = audio.load_wav(wav_path)
+    if hparams.use_injected_noise:
+        noise = np.random.normal(0.0, 1.0 / hparams.quantize_channels, wav.shape)
+        wav += noise
 
     wav, _ = librosa.effects.trim(wav, top_db=20)
 

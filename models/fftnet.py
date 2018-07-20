@@ -11,10 +11,18 @@ class FFTNet(object):
         self.receptive_filed = 2**hp.n_layers
         # fft layer
         self.fft_layers = []
+
+        if utils.is_mulaw_quantize(self.hp.input_type):
+            self.pad_value = 128
+            self.in_channels = 256
+        else:
+            self.pad_value = 0
+            self.in_channels = 1
+
         for idx in range(0, hp.n_layers):
             layer_index = hp.n_layers - idx
             if idx == 0:
-                self.fft_layers += [FFTLayer(1, hp.hidden_channels, layer_index, hp.cin_channels, name='fft_layer_{}'.format(idx))]
+                self.fft_layers += [FFTLayer(self.in_channels, hp.hidden_channels, layer_index, hp.cin_channels, name='fft_layer_{}'.format(idx))]
             else:
                 self.fft_layers += [FFTLayer(hp.hidden_channels, hp.hidden_channels, layer_index, hp.cin_channels, name='fft_layer_{}'.format(idx))]
         self.out_layer = tf.layers.Dense(units=hp.quantize_channels, name='out_dense')
@@ -35,10 +43,18 @@ class FFTNet(object):
         if g is not None:
             raise NotImplementedError("global condition is not added now!")
 
+        # apply zero padding to inputs
+        padding = tf.constant([[0, 0], [self.receptive_filed, 0]])
+        inputs = tf.pad(inputs, padding, constant_values=self.pad_value)
+
         # the rank of inputs is 2
-        inputs = tf.expand_dims(inputs, axis=-1)
+        if utils.is_mulaw_quantize(self.hp.input_type):
+            inputs = tf.one_hot(tf.cast(inputs, tf.int32), self.hp.quantize_channels)
+        else:
+            inputs = tf.expand_dims(inputs, axis=-1)
+
         with tf.control_dependencies([tf.assert_equal(tf.rank(inputs), 3)]):
-            inputs = tf.identity(inputs)
+            outputs = tf.identity(inputs)
 
         self.targets = tf.cast(targets, tf.int32)
 
@@ -49,14 +65,11 @@ class FFTNet(object):
                 c = transposed_conv(c)
             c = tf.squeeze(c, axis=-1)  # [B new_T cin_channels]
 
-        # apply zero padding to inputs and condition
+        # apply zero padding to condition
         if c is not None:
             c_shape = tf.shape(c)
             padding_c = tf.zeros([c_shape[0], self.receptive_filed, c_shape[-1]])
             c = tf.concat([padding_c, c], axis=1)
-
-        padding = tf.constant([[0, 0], [self.receptive_filed, 0], [0, 0]])
-        outputs = tf.pad(inputs, padding, constant_values=0)
 
         # for training, we need to use previous samples and the condition of next sample (shift by one)
         outputs = outputs[:, :-1, :]
@@ -69,12 +82,17 @@ class FFTNet(object):
         self.outputs = outputs
         self.log_outputs = tf.argmax(tf.nn.softmax(self.outputs, axis=-1), axis=-1)
 
-    def predict(self, c=None, g=None, test_inputs=None):
+    def predict(self, c=None, g=None, test_inputs=None, targets=None):
         if g is not None:
             raise NotImplementedError("global condition is not added now!")
 
         # use the zero as inputs
-        inputs = tf.zeros([1, self.receptive_filed, 1], dtype=tf.float32)
+        inputs = tf.zeros([1, self.receptive_filed], dtype=tf.float32)
+        if utils.is_mulaw_quantize(self.hp.input_type):
+            inputs = utils.mulaw_quantize(inputs, self.hp.quantize_channels)
+            inputs = tf.one_hot(tf.cast(inputs, tf.int32), self.hp.quantize_channels)
+        else:
+            inputs = tf.expand_dims(inputs, axis=-1)
 
         # check whether need to upsample condition
         if c is not None and self.upsample_conv is not None:
@@ -109,18 +127,29 @@ class FFTNet(object):
 
             posterior = tf.nn.softmax(tf.reshape(current_outputs, [1, -1]), axis=-1)
 
-            dist = tf.distributions.Categorical(probs=posterior)
-            sample = tf.cast(dist.sample(), tf.int32)
+            # dist = tf.distributions.Categorical(probs=posterior)
+            # sample = tf.cast(dist.sample(), tf.int32)
 
-            sample = utils.inv_mulaw_quantize(sample, self.hp.quantize_channels)
-            final_outputs = final_outputs.write(time, sample)
+            sample = tf.py_func(np.random.choice,
+                                [np.arange(self.hp.quantize_channels), 1, True, tf.reshape(posterior, [-1])], tf.int64)
+            sample = tf.reshape(sample, [-1])
+
+            # sample = tf.argmax(posterior, axis=-1)
+
+            decode_sample = utils.inv_mulaw_quantize(sample, self.hp.quantize_channels)
+            final_outputs = final_outputs.write(time, decode_sample)
+
+            if utils.is_mulaw_quantize(self.hp.input_type):
+                next_sample = tf.one_hot(tf.cast(sample, tf.int32), self.hp.quantize_channels)
+            else:
+                next_sample = decode_sample
 
             next_time = time + 1
             next_inputs = current_inputs[:, 1:, :]
             if test_inputs is not None:
-                next_sample = tf.reshape(test_inputs[:, next_time], [1, 1, 1])
+                next_sample = tf.reshape(test_inputs[:, next_time], [1, 1, self.in_channels])
             else:
-                next_sample = tf.reshape(sample, [1, 1, 1])
+                next_sample = tf.reshape(next_sample, [1, 1, self.in_channels])
 
             next_inputs = tf.concat([next_inputs, tf.cast(next_sample, tf.float32)], axis=1)
 
@@ -136,6 +165,7 @@ class FFTNet(object):
         outputs_ta = result[2]
         outputs = outputs_ta.stack()
         self.outputs = outputs
+        self.targets = utils.inv_mulaw_quantize(targets, self.hp.quantize_channels) if targets is not None else None
 
     def add_loss(self):
         with tf.variable_scope("loss"):

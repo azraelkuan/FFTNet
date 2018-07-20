@@ -85,7 +85,12 @@ class Feeder(object):
             # adjust time step for local condition
             max_time_step = self._limit_time()
             input_data, local_feature = self._adjust_time_step(input_data, local_feature, max_time_step)
-            target_data = utils.mulaw_quantize(input_data, self._hparams.quantize_channels)
+            # make sure that target is under mu law encode
+            if utils.is_mulaw_quantize(self._hparams.input_type):
+                target_data = input_data
+            else:
+                target_data = utils.mulaw_quantize(input_data, self._hparams.quantize_channels)
+
             input_length = len(input_data)
             yield input_data, target_data, input_length, local_feature, global_feature
 
@@ -100,21 +105,21 @@ def _ensure_divisible(length, divisible_by=256, lower=True):
 
 
 def get_dataset(meta_file, shuffle, hparams, batch_size):
-    feeder = Feeder(meta_file, hparams, speaker_id=2)
-    if feeder.use_local and feeder.use_local:
-        output_types = (tf.float32, tf.int32, tf.int32, tf.float32, tf.int32)
+    feeder = Feeder(meta_file, hparams, speaker_id=6)
+    if feeder.use_local and feeder.use_global:
+        output_types = (tf.float32, tf.float32, tf.int32, tf.float32, tf.int32)
         output_shapes = (tf.TensorShape([None]), tf.TensorShape([None]), tf.TensorShape([]),
                          tf.TensorShape([None, hparams.num_mels]), tf.TensorShape([]))
     elif feeder.use_local:
-        output_types = (tf.float32, tf.int32, tf.int32, tf.float32, tf.bool)
+        output_types = (tf.float32, tf.float32, tf.int32, tf.float32, tf.bool)
         output_shapes = (tf.TensorShape([None]), tf.TensorShape([None]), tf.TensorShape([]),
                          tf.TensorShape([None, hparams.num_mels]), tf.TensorShape([]))
-    elif feeder.use_local:
-        output_types = (tf.float32, tf.int32, tf.int32, tf.bool, tf.int32)
+    elif feeder.use_global:
+        output_types = (tf.float32, tf.float32, tf.int32, tf.bool, tf.int32)
         output_shapes = (tf.TensorShape([None]), tf.TensorShape([None]), tf.TensorShape([]), tf.TensorShape([]),
                          tf.TensorShape([]))
     else:
-        output_types = (tf.float32, tf.int32, tf.int32, tf.bool, tf.bool)
+        output_types = (tf.float32, tf.float32, tf.int32, tf.bool, tf.bool)
         output_shapes = (tf.TensorShape([None]), tf.TensorShape([None]), tf.TensorShape([]), tf.TensorShape([]),
                          tf.TensorShape([]))
     dataset = tf.data.Dataset.from_generator(generator=feeder.get_one_example,
@@ -126,12 +131,14 @@ def get_dataset(meta_file, shuffle, hparams, batch_size):
     return dataset.prefetch(batch_size * 4)
 
 
-if __name__ == '__main__':
-    dataset = get_dataset('/mnt/lustre/sjtu/users/kc430/data/my/fftnet/cmu_arctic/train.txt', shuffle=True, hparams=hparams, batch_size=3)
-    iterator = dataset.make_one_shot_iterator()
-    next = iterator.get_next()
-
-    with tf.Session() as sess:
-        data = sess.run(next)
-        print(data[0])
-        print(data[1])
+# if __name__ == '__main__':
+#     hparams.parse("input_type=mulaw-quantize,")
+#
+#     dataset = get_dataset('/mnt/lustre/sjtu/users/kc430/data/my/fftnet/cmu_arctic_mu_law/train.txt', shuffle=True, hparams=hparams, batch_size=3)
+#     iterator = dataset.make_one_shot_iterator()
+#     next = iterator.get_next()
+#
+#     with tf.Session() as sess:
+#         data = sess.run(next)
+#         print(data[0])
+#         print(data[1])

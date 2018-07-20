@@ -69,6 +69,7 @@ hparams = tf.contrib.training.HParams(
     max_time_sec=None,
     max_time_steps=8000,
 
+    use_injected_noise=False,
 
 )
 
