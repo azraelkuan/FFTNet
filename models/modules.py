@@ -34,9 +34,10 @@ class Conv1D(object):
 
 class FFTLayer(object):
 
-    def __init__(self, in_channels, hidden_channels, layer_index, cin_channels=-1, name='fft_layer'):
+    def __init__(self, in_channels, hidden_channels, layer_index, cin_channels=-1, pad_value=0, name='fft_layer'):
         self.receptive_field = 2**layer_index
         self.shift = self.receptive_field // 2
+        self.pad_value = pad_value
 
         with tf.variable_scope(name) as scope:
             self.left_conv = Conv1D(in_channels, hidden_channels, kernel_size=1, name='left_conv')
@@ -51,11 +52,26 @@ class FFTLayer(object):
 
     def __call__(self, inputs,  c=None):
         with tf.name_scope(self.scope.original_name_scope):
+            # get current condition
+            if c is not None:
+                c = c[:, -tf.shape(inputs)[1]:, :]
+
+            # apply zero padding to inputs
+            # when use mu-law, the input is one-hot
+            padding = tf.constant([[0, 0], [self.shift, 0], [0, 0]])
+            if self.pad_value != 0:
+                input_pad = tf.ones(shape=(tf.shape(inputs)[0], self.shift), dtype=tf.int32) * self.pad_value
+                input_pad = tf.one_hot(input_pad, depth=tf.shape(inputs)[-1])
+                inputs = tf.concat([input_pad, inputs], axis=1)
+            else:
+                inputs = tf.pad(inputs, padding, constant_values=self.pad_value)
+
             left_out = self.left_conv(inputs[:, :-self.shift, :])
             right_out = self.right_conv(inputs[:, self.shift:, :])
 
             if c is not None:
-                c = c[:, -tf.shape(inputs)[1]:, :]
+                # apply zero padding to condition
+                c = tf.pad(c, padding, constant_values=0)
                 left_lc_out = self.cin_left_conv(c[:, :-self.shift, :])
                 right_lc_out = self.cin_right_conv(c[:, self.shift:, :])
                 left_out += left_lc_out
