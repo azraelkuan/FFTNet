@@ -186,7 +186,7 @@ def train(log_dir, args, hp):
                     train_loss_window.append(loss)
                     if step % 10 == 0:
                         message = 'Epoch {:4d} Train Step {:7d} [{:.3f} sec/step step_loss={:.5f} avg_loss={:.5f}]'.format(
-                            epoch, step, time.time()-start_time, loss, train_loss_window.average)
+                            epoch, step, time.time() - start_time, loss, train_loss_window.average)
                         print(message)
 
                     if step % args.checkpoint_interval == 0:
