@@ -5,10 +5,9 @@ import numpy as np
 
 
 class FFTNet(object):
-
     def __init__(self, hp):
         self.hp = hp
-        self.receptive_filed = 2**hp.n_layers
+        self.receptive_filed = 2 ** hp.n_layers
         # fft layer
         self.fft_layers = []
 
@@ -40,6 +39,7 @@ class FFTNet(object):
             self.upsample_conv = None
 
         print('Receptive Field: %i samples' % self.receptive_filed)
+        print('pad value: {}'.format(pad_value))
 
     def forward(self, inputs, targets=None, c=None, g=None):
         if g is not None:
@@ -83,11 +83,7 @@ class FFTNet(object):
 
         # use the zero as inputs
         inputs = tf.zeros([1, self.receptive_filed], dtype=tf.float32)
-        if utils.is_mulaw_quantize(self.hp.input_type):
-            inputs = utils.mulaw_quantize(inputs, self.hp.quantize_channels)
-            inputs = tf.one_hot(tf.cast(inputs, tf.int32), self.hp.quantize_channels)
-        else:
-            inputs = tf.expand_dims(inputs, axis=-1)
+        inputs = self._convert_type(inputs)
 
         # check whether need to upsample condition
         if c is not None and self.upsample_conv is not None:
@@ -113,7 +109,7 @@ class FFTNet(object):
 
         def body(time, current_inputs, final_outputs):
             # we need shift condition by one
-            current_c = c[:, time+1:time+1+self.receptive_filed, :] if c is not None else None
+            current_c = c[:, time + 1:time + 1 + self.receptive_filed, :] if c is not None else None
 
             current_outputs = current_inputs
             for layer in self.fft_layers:
@@ -162,6 +158,111 @@ class FFTNet(object):
         self.outputs = outputs
         self.targets = utils.inv_mulaw_quantize(targets, self.hp.quantize_channels) if targets is not None else None
 
+    def incremental_forward(self, c=None, g=None, test_inputs=None, targets=None):
+        if g is not None:
+            raise NotImplementedError("global condition is not added now!")
+
+        # use the zero as inputs
+        inputs = tf.zeros([1, 1], dtype=tf.float32)
+        if utils.is_mulaw_quantize(self.hp.input_type):
+            inputs = utils.mulaw_quantize(inputs, self.hp.quantize_channels)
+            inputs = tf.one_hot(tf.cast(inputs, tf.int32), self.hp.quantize_channels)
+        else:
+            inputs = tf.expand_dims(inputs, axis=-1)
+
+        # check whether need to upsample condition
+        if c is not None and self.upsample_conv is not None:
+            c = tf.expand_dims(c, axis=-1)  # [B T cin_channels 1]
+            for transposed_conv in self.upsample_conv:
+                c = transposed_conv(c)
+            c = tf.squeeze(c, axis=-1)  # [B new_T cin_channels]
+
+        # apply zero padding to condition
+        if c is not None:
+            c_shape = tf.shape(c)
+            padding_c = tf.zeros([c_shape[0], self.receptive_filed, c_shape[-1]])
+            c = tf.concat([padding_c, c], axis=1)
+            # create c_buffers
+            c_buffers = [tf.zeros([1, 2 ** i // 2+1, self.hp.cin_channels]) for i in range(self.hp.n_layers, 0, -1)]
+
+        synthesis_length = tf.shape(c)[1]
+
+        initial_time = tf.constant(0, dtype=tf.int32)
+
+        initial_outputs_ta = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+
+        input_buffers = [self._convert_type(tf.zeros([1, 2 ** self.hp.n_layers // 2+1]))]
+        for i in range(self.hp.n_layers - 1, 0, -1):
+            input_buffers.append(
+                self._convert_type(tf.zeros([1, 2 ** i // 2+1]))
+            )
+
+        def condition(time, unused_initial_input, unused_final_outputs, unused_input_buffers, unused_c_buffers):
+            return tf.less(time, synthesis_length)
+
+        def body(time, current_inputs, final_outputs, current_input_buffers, current_c_buffers):
+            # we need shift condition by one
+            current_c = c[:, time:time+1, :] if c is not None else None
+
+            current_outputs = current_inputs
+            new_input_buffers = []
+            new_c_buffers = []
+
+            for layer, current_input_buffer, current_c_buffer in zip(self.fft_layers, current_input_buffers,
+                                                                     current_c_buffers):
+                current_outputs, out_input_buffer, out_c_buffer = layer.incremental_forward(
+                    current_outputs,
+                    c=current_c,
+                    input_buffers=current_input_buffer,
+                    c_buffers=current_c_buffer,
+                )
+                new_input_buffers.append(out_input_buffer)
+                new_c_buffers.append(out_c_buffer)
+
+            current_outputs = self.out_layer(current_outputs)
+
+            posterior = tf.nn.softmax(tf.reshape(current_outputs, [1, -1]), axis=-1)
+
+            # dist = tf.distributions.Categorical(probs=posterior)
+            # sample = tf.cast(dist.sample(), tf.int32)
+
+            sample = tf.py_func(np.random.choice,
+                                [np.arange(self.hp.quantize_channels), 1, True, tf.reshape(posterior, [-1])], tf.int64)
+            sample = tf.reshape(sample, [-1])
+
+            # sample = tf.argmax(posterior, axis=-1)
+
+            decode_sample = utils.inv_mulaw_quantize(sample, self.hp.quantize_channels)
+            final_outputs = final_outputs.write(time, decode_sample)
+
+            if utils.is_mulaw_quantize(self.hp.input_type):
+                next_sample = tf.one_hot(tf.cast(sample, tf.int32), self.hp.quantize_channels)
+            else:
+                next_sample = decode_sample
+
+            next_time = time + 1
+            next_inputs = current_inputs[:, 1:, :]
+            if test_inputs is not None:
+                next_sample = tf.reshape(test_inputs[:, next_time], [1, 1, self.in_channels])
+            else:
+                next_sample = tf.reshape(next_sample, [1, 1, self.in_channels])
+
+            next_inputs = tf.concat([next_inputs, tf.cast(next_sample, tf.float32)], axis=1)
+
+            return next_time, next_inputs, final_outputs, new_input_buffers, new_c_buffers
+
+        result = tf.while_loop(condition,
+                               body,
+                               loop_vars=[initial_time, inputs, initial_outputs_ta, input_buffers, c_buffers],
+                               parallel_iterations=32,
+                               swap_memory=True
+                               )
+
+        outputs_ta = result[2]
+        outputs = outputs_ta.stack()
+        self.outputs = outputs
+        self.targets = utils.inv_mulaw_quantize(targets, self.hp.quantize_channels) if targets is not None else None
+
     def add_loss(self):
         with tf.variable_scope("loss"):
             loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -180,5 +281,11 @@ class FFTNet(object):
             # This is the optimize call instead of traditional adam_optimize one.
             self.optimize = ema.apply(tf.trainable_variables())
 
-
+    def _convert_type(self, inputs):
+        if utils.is_mulaw_quantize(self.hp.input_type):
+            inputs = utils.mulaw_quantize(inputs, self.hp.quantize_channels)
+            inputs = tf.one_hot(tf.cast(inputs, tf.int32), self.hp.quantize_channels)
+        else:
+            inputs = tf.expand_dims(inputs, axis=-1)
+        return inputs
 

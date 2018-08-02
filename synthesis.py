@@ -33,7 +33,7 @@ def create_placeholders():
 def create_model(ph, hp):
     with tf.variable_scope("model"):
         model = FFTNet(hp)
-        model.predict(c=ph['local_condition'], g=None, targets=None)
+        model.incremental_forward(c=ph['local_condition'], g=None, targets=None)
     return model
 
 
