@@ -85,7 +85,7 @@ def save_log(sess, step, model, plot_dir, audio_dir, hp):
 
 def eval_step(eval_model, sess, step, eval_plot_dir, eval_audio_dir):
     start_time = time.time()
-    y_hat, y = sess.run([eval_model.outputs, eval_model.targets])
+    y_hat, y = sess.run([eval_model.eval_outputs, eval_model.eval_targets])
     duration = time.time() - start_time
     print('Time Evaluation: Generation of {} audio samples took {:.3f} sec ({:.3f} frames/sec)'.format(
         len(y_hat), duration, len(y_hat) / duration))
@@ -252,7 +252,7 @@ def main():
                         help='Steps between running summary ops')
     parser.add_argument('--summary_val_interval', type=int, default=10,
                         help='Steps between running summary ops')
-    parser.add_argument('--eval_interval', type=int, default=99,
+    parser.add_argument('--eval_interval', type=int, default=100,
                         help='Steps between train eval ops')
     parser.add_argument('--checkpoint_interval', type=int, default=2000,
                         help='Steps between writing checkpoints')

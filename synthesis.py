@@ -67,7 +67,7 @@ def synthesis(checkpoint_path, local_path, global_id, output_dir, hp):
     with tf.Session(config=config) as sess:
         saver.restore(sess, checkpoint_path)
         start_time = time.time()
-        outputs = sess.run(model.outputs, feed_dict={ph['local_condition']: local_condition})
+        outputs = sess.run(model.eval_outputs, feed_dict={ph['local_condition']: local_condition})
         duration = time.time() - start_time
         print('Time Evaluation: Generation of {} audio samples took {:.3f} sec ({:.3f} frames/sec)'.format(
             len(outputs), duration, len(outputs) / duration))

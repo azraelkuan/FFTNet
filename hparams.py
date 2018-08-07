@@ -12,7 +12,7 @@ hparams = tf.contrib.training.HParams(
     # input and softmax output are assumed.
     # **NOTE**: if you change the one of the two parameters below, you need to
     # re-run preprocessing before training.
-    input_type="raw",
+    input_type="mulaw-quantize",
     quantize_channels=256,  # 65536 or 256
 
     # Audio:

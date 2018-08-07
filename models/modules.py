@@ -2,19 +2,13 @@ import tensorflow as tf
 
 
 def create_variable(name, shape, _type=0):
-    if _type == 0:
-        # kernel
+    if name == 'kernel':
         return tf.get_variable(name=name, shape=shape, dtype=tf.float32,
-                               initializer=tf.truncated_normal_initializer())
-    elif _type == 1:
-        # bias
+                               initializer=tf.glorot_normal_initializer())
+    elif name == "bias":
         return tf.get_variable(name=name, shape=shape, dtype=tf.float32, initializer=tf.zeros_initializer())
-    elif _type == 2:
-        # weight norm
-        return tf.get_variable(name=name, shape=shape, dtype=tf.float32, initializer=tf.constant_initializer(1.))
     else:
-        raise ValueError("{} type is not supported".format(_type))
-
+        raise ValueError("no such variable: {}".format(name))
 
 class Conv1D(object):
 
@@ -31,7 +25,7 @@ class Conv1D(object):
             self.kernel = create_variable(name='kernel', shape=kernel_shape)
 
             if use_bias:
-                self.bias = create_variable(name='bias', shape=(out_channels, ), _type=1)
+                self.bias = create_variable(name='bias', shape=(out_channels, ))
 
     def __call__(self, inputs):
         with tf.name_scope(self.scope.original_name_scope):
@@ -84,9 +78,9 @@ class FFTLayer(object):
 
     def __call__(self, inputs,  c=None):
         with tf.name_scope(self.scope.original_name_scope):
-            # get current condition
-            if c is not None:
-                c = c[:, -tf.shape(inputs)[1]:, :]
+            # # get current condition
+            # if c is not None:
+            #     c = c[:, -tf.shape(inputs)[1]:, :]
 
             # apply zero padding to inputs
             # when use mu-law, the input is one-hot, BxTx256
@@ -162,7 +156,7 @@ class ConvTransposed2d(object):
 
     def __call__(self, inputs):
         with tf.variable_scope(self.scope):
-            return self.conv(inputs)
+            return tf.nn.relu(self.conv(inputs), alpha=0.4)
 
 
 

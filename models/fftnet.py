@@ -155,8 +155,8 @@ class FFTNet(object):
 
         outputs_ta = result[2]
         outputs = outputs_ta.stack()
-        self.outputs = outputs
-        self.targets = utils.inv_mulaw_quantize(targets, self.hp.quantize_channels) if targets is not None else None
+        self.eval_outputs = outputs
+        self.eval_targets = utils.inv_mulaw_quantize(targets, self.hp.quantize_channels) if targets is not None else None
 
     def incremental_forward(self, c=None, g=None, test_inputs=None, targets=None):
         if g is not None:
@@ -211,7 +211,7 @@ class FFTNet(object):
             for layer, current_input_buffer, current_c_buffer in zip(self.fft_layers, current_input_buffers,
                                                                      current_c_buffers):
                 current_outputs, out_input_buffer, out_c_buffer = layer.incremental_forward(
-                    current_outputs,
+                    inputs=current_outputs,
                     c=current_c,
                     input_buffers=current_input_buffer,
                     c_buffers=current_c_buffer,
@@ -260,11 +260,12 @@ class FFTNet(object):
 
         outputs_ta = result[2]
         outputs = outputs_ta.stack()
-        self.outputs = outputs
-        self.targets = utils.inv_mulaw_quantize(targets, self.hp.quantize_channels) if targets is not None else None
+        self.eval_outputs = outputs
+        self.eval_targets = utils.inv_mulaw_quantize(targets, self.hp.quantize_channels) if targets is not None else None
 
     def add_loss(self):
         with tf.variable_scope("loss"):
+
             loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 logits=self.outputs,
                 labels=self.targets[:, 1:]
